@@ -85,6 +85,8 @@ DATABASES = {
     }
 }
 
+DATABASE_ROUTERS = ["django_mongodb_backend.routers.MongoRouter"]
+
 DEFAULT_AUTO_FIELD = 'django_mongodb_backend.fields.ObjectIdAutoField'
 
 MIGRATION_MODULES = {
