@@ -79,6 +79,77 @@ class DocumentModelTests(TestCase):
         doc.refresh_from_db()
         self.assertEqual(doc.polymorphic_payload, {"a": 1})
 
+    def test_document_stores_raw_file(self):
+        doc = Document.objects.create(
+            title="data.bin",
+            file_type="bin",
+            raw_text="",
+            raw_file=b"\x00\x01\x02\xff\xfe",
+        )
+        doc.refresh_from_db()
+        self.assertEqual(doc.raw_file, b"\x00\x01\x02\xff\xfe")
+
+
+# ── Utility Tests ────────────────────────────────────────────────────────────
+
+class UtilityTests(TestCase):
+    def test_is_vision_file_pdf(self):
+        from .utils import is_vision_file
+        self.assertTrue(is_vision_file("doc.pdf"))
+
+    def test_is_vision_file_image(self):
+        from .utils import is_vision_file
+        self.assertTrue(is_vision_file("photo.png"))
+        self.assertTrue(is_vision_file("photo.jpg"))
+        self.assertTrue(is_vision_file("photo.jpeg"))
+
+    def test_is_vision_file_text(self):
+        from .utils import is_vision_file
+        self.assertFalse(is_vision_file("notes.txt"))
+        self.assertFalse(is_vision_file("data.csv"))
+        self.assertFalse(is_vision_file("README"))
+
+    def test_encode_for_vision_image_bytes(self):
+        from .utils import encode_for_vision
+        # Create a tiny valid PNG
+        from PIL import Image
+        import io
+        img = Image.new("RGB", (2, 2), color="red")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        png_bytes = buf.getvalue()
+        b64 = encode_for_vision("test.png", png_bytes)
+        self.assertIsInstance(b64, str)
+        self.assertGreater(len(b64), 0)
+        # Should be valid base64
+        import base64
+        base64.b64decode(b64)
+
+    def test_encode_for_vision_pdf(self):
+        from .utils import encode_for_vision
+        # Minimal PDF
+        pdf_bytes = (
+            b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+            b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
+            b"3 0 obj<</Type/Page/MediaBox[0 0 100 100]/Parent 2 0 R"
+            b"/Contents 4 0 R>>endobj\n"
+            b"4 0 obj<</Length 22>>stream\nBT /F1 12 Tf 10 50 Td"
+            b"(A)Tj ET\nendstream\nendobj\nxref\n0 5\n"
+            b"0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n"
+            b"0000000115 00000 n \n0000000196 00000 n \n"
+            b"trailer<</Size 5/Root 1 0 R>>\nstartxref\n303\n%%EOF"
+        )
+        b64 = encode_for_vision("doc.pdf", pdf_bytes)
+        self.assertIsInstance(b64, str)
+        self.assertGreater(len(b64), 100)
+        import base64
+        base64.b64decode(b64)
+
+    def test_encode_for_vision_invalid_image(self):
+        from .utils import encode_for_vision
+        with self.assertRaises(ValueError):
+            encode_for_vision("bad.png", b"not an image")
+
 
 # ── Service-Layer Tests ──────────────────────────────────────────────────────
 
@@ -112,7 +183,7 @@ class DocumentProcessingServiceTests(TestCase):
         mock_groq_cls.return_value = mock_client
 
         doc = Document.objects.create(
-            title="inv.pdf", file_type="pdf", raw_text="INVOICE $100"
+            title="inv.txt", file_type="txt", raw_text="INVOICE $100"
         )
         result = DocumentProcessingService().analyze(doc)
 
@@ -158,7 +229,7 @@ class DocumentProcessingServiceTests(TestCase):
         mock_groq_cls.return_value = mock_client
 
         doc = Document.objects.create(
-            title="fail.pdf", file_type="pdf", raw_text="oops"
+            title="fail.txt", file_type="txt", raw_text="oops"
         )
         result = DocumentProcessingService().analyze(doc)
         self.assertIn("error", result)
@@ -362,6 +433,187 @@ class DocumentProcessingServiceTests(TestCase):
         ][0]["content"]
         self.assertIn(raw, sent_content)
 
+    # ── vision pipeline ───────────────────────────────────────────────────
+
+    @patch("analytics_engine.services.encode_for_vision")
+    @patch("analytics_engine.services.Groq")
+    def test_vision_pipeline_dispatches_for_pdf(
+        self, mock_groq_cls, mock_encode
+    ):
+        mock_encode.return_value = "fakebase64=="
+        raw_payload = {
+            "analysis_metadata": {
+                "summary": "Vision-analyzed PDF",
+                "classification": "Contract",
+                "confidence_score": 0.92,
+            },
+            "polymorphic_payload": {"clauses": 3},
+        }
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = (
+            self._build_mock_groq_response(json.dumps(raw_payload))
+        )
+        mock_groq_cls.return_value = mock_client
+
+        doc = Document.objects.create(
+            title="scan.pdf",
+            file_type="pdf",
+            raw_text="",
+            raw_file=b"dummy pdf bytes",
+        )
+        result = DocumentProcessingService().analyze(doc)
+
+        self.assertEqual(
+            result["analysis_metadata"]["classification"], "Contract"
+        )
+        # Verify vision model was used
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        self.assertEqual(
+            call_kwargs["model"], "meta-llama/llama-4-scout-17b-16e-instruct"
+        )
+        # Verify image_url content type was sent
+        messages = call_kwargs["messages"]
+        self.assertEqual(len(messages), 1)
+        content = messages[0]["content"]
+        self.assertIsInstance(content, list)
+        self.assertEqual(content[1]["type"], "image_url")
+        mock_encode.assert_called_once_with("scan.pdf", b"dummy pdf bytes")
+
+    @patch("analytics_engine.services.encode_for_vision")
+    @patch("analytics_engine.services.Groq")
+    def test_vision_pipeline_dispatches_for_image(
+        self, mock_groq_cls, mock_encode
+    ):
+        mock_encode.return_value = "fakebase64=="
+        raw_payload = {
+            "analysis_metadata": {
+                "summary": "Photo analysis",
+                "classification": "Receipt",
+                "confidence_score": 0.88,
+            },
+            "polymorphic_payload": {"total": 45.0},
+        }
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = (
+            self._build_mock_groq_response(json.dumps(raw_payload))
+        )
+        mock_groq_cls.return_value = mock_client
+
+        doc = Document.objects.create(
+            title="receipt.png",
+            file_type="png",
+            raw_text="",
+            raw_file=b"dummy image bytes",
+        )
+        result = DocumentProcessingService().analyze(doc)
+
+        self.assertEqual(result["analysis_metadata"]["classification"], "Receipt")
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        self.assertEqual(
+            call_kwargs["model"], "meta-llama/llama-4-scout-17b-16e-instruct"
+        )
+        mock_encode.assert_called_once_with("receipt.png", b"dummy image bytes")
+
+    @patch("analytics_engine.services.Groq")
+    def test_text_pipeline_for_txt_file(self, mock_groq_cls):
+        raw_payload = {
+            "analysis_metadata": {
+                "summary": "Text analysis",
+                "classification": "Note",
+                "confidence_score": 0.75,
+            },
+            "polymorphic_payload": {"words": 42},
+        }
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = (
+            self._build_mock_groq_response(json.dumps(raw_payload))
+        )
+        mock_groq_cls.return_value = mock_client
+
+        doc = Document.objects.create(
+            title="notes.txt",
+            file_type="txt",
+            raw_text="some text content",
+            raw_file=b"some text content",
+        )
+        result = DocumentProcessingService().analyze(doc)
+
+        self.assertEqual(result["analysis_metadata"]["classification"], "Note")
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        self.assertEqual(call_kwargs["model"], "llama-3.1-8b-instant")
+        # Should NOT use image_url content
+        content = call_kwargs["messages"][0]["content"]
+        self.assertIsInstance(content, str)
+
+    @patch("analytics_engine.services.encode_for_vision")
+    @patch("analytics_engine.services.Groq")
+    def test_vision_fails_without_raw_file(self, mock_groq_cls, mock_encode):
+        doc = Document.objects.create(
+            title="scan.pdf", file_type="pdf", raw_text="", raw_file=None
+        )
+        result = DocumentProcessingService().analyze(doc)
+        self.assertIn("error", result)
+        self.assertIn("No raw file data", result["error"])
+        mock_encode.assert_not_called()
+
+    @patch("analytics_engine.services.Groq")
+    def test_truncates_oversized_text(self, mock_groq_cls):
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = (
+            self._build_mock_groq_response(
+                json.dumps({
+                    "analysis_metadata": {
+                        "summary": "x",
+                        "classification": "x",
+                        "confidence_score": 0.5,
+                    },
+                    "polymorphic_payload": {},
+                })
+            )
+        )
+        mock_groq_cls.return_value = mock_client
+
+        large_text = "a" * 50_000
+        doc = Document.objects.create(
+            title="large.txt", file_type="txt", raw_text=large_text
+        )
+        DocumentProcessingService().analyze(doc)
+
+        sent_content = mock_client.chat.completions.create.call_args[1][
+            "messages"
+        ][0]["content"]
+        self.assertIn("[Document was truncated due to length.]", sent_content)
+        self.assertLess(len(sent_content), 35_000)
+
+    @patch("analytics_engine.services.Groq")
+    def test_does_not_truncate_small_text(self, mock_groq_cls):
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = (
+            self._build_mock_groq_response(
+                json.dumps({
+                    "analysis_metadata": {
+                        "summary": "x",
+                        "classification": "x",
+                        "confidence_score": 0.5,
+                    },
+                    "polymorphic_payload": {},
+                })
+            )
+        )
+        mock_groq_cls.return_value = mock_client
+
+        small_text = "small document"
+        doc = Document.objects.create(
+            title="small.txt", file_type="txt", raw_text=small_text
+        )
+        DocumentProcessingService().analyze(doc)
+
+        sent_content = mock_client.chat.completions.create.call_args[1][
+            "messages"
+        ][0]["content"]
+        self.assertIn(small_text, sent_content)
+        self.assertNotIn("truncated", sent_content)
+
 
 # ── View Tests ───────────────────────────────────────────────────────────────
 
@@ -380,6 +632,7 @@ class DocumentUploadViewTests(TestCase):
         doc = Document.objects.get(pk=body["id"])
         self.assertEqual(doc.raw_text, "hello world, this is a test file")
         self.assertEqual(doc.file_type, "txt")
+        self.assertEqual(doc.raw_file, b"hello world, this is a test file")
 
     def test_upload_missing_file(self):
         resp = self.client.post(reverse("document-upload"), {}, format="multipart")
