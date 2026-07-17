@@ -1,12 +1,13 @@
 import json
 
 from django.http import JsonResponse
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, render
 from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
 from .models import Annotation, Document
+from .utils import extract_text
 
 
 def _trigger_llm_pipeline(document):
@@ -21,10 +22,13 @@ class DocumentUploadView(View):
         if not uploaded:
             return JsonResponse({"error": "No file provided"}, status=400)
 
+        raw_bytes = uploaded.read()
+        raw_text = extract_text(uploaded.name, raw_bytes)
         doc = Document.objects.create(
             title=uploaded.name,
             file_type=uploaded.name.split(".")[-1] if "." in uploaded.name else "",
-            raw_text=uploaded.read().decode("utf-8", errors="replace"),
+            raw_text=raw_text,
+            raw_file=raw_bytes,
         )
         return JsonResponse(
             {"id": str(doc.pk), "title": doc.title, "uploaded_at": doc.uploaded_at.isoformat()},
@@ -91,3 +95,15 @@ class DocumentAnnotateView(View):
             },
             status=201,
         )
+
+
+class DashboardView(View):
+    def get(self, request):
+        docs = Document.objects.all().order_by("-uploaded_at")
+        return render(request, "analytics/dashboard.html", {"documents": docs})
+
+
+class DocumentDetailHTMLView(View):
+    def get(self, request, id):
+        doc = get_object_or_404(Document, pk=id)
+        return render(request, "analytics/document_detail.html", {"document": doc})
