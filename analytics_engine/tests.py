@@ -1,18 +1,27 @@
+"""Tests for analytics_engine models, utils, services, and views."""
+
+import base64
 import json
 from io import BytesIO
 from unittest.mock import MagicMock, patch
+
+from PIL import Image
 
 from django.test import TestCase
 from django.urls import reverse
 
 from .models import AnalysisMetadata, Annotation, Document
 from .services import DocumentProcessingService, analyze_document
+from .utils import encode_for_vision, is_vision_file
 
 
 # ── Model Tests ──────────────────────────────────────────────────────────────
 
 class DocumentModelTests(TestCase):
+    """Tests for Document model creation and field persistence."""
+
     def test_create_document_minimal(self):
+        """A document can be created with only the required fields."""
         doc = Document.objects.create(
             title="test.txt", file_type="txt", raw_text="hello"
         )
@@ -26,6 +35,7 @@ class DocumentModelTests(TestCase):
         self.assertEqual(list(doc.annotations), [])
 
     def test_create_document_with_analysis_metadata(self):
+        """Embedded analysis metadata is persisted and retrievable."""
         doc = Document.objects.create(
             title="report.pdf",
             file_type="pdf",
@@ -43,12 +53,14 @@ class DocumentModelTests(TestCase):
         self.assertEqual(doc.polymorphic_payload, {"key": "value"})
 
     def test_document_str_method(self):
+        """The string representation returns the document title."""
         doc = Document.objects.create(
             title="my_doc.pdf", file_type="pdf", raw_text="data"
         )
         self.assertEqual(str(doc), "my_doc.pdf")
 
     def test_document_with_annotations(self):
+        """Annotations can be added and persisted to a document."""
         doc = Document.objects.create(
             title="notes.txt", file_type="txt", raw_text="important stuff"
         )
@@ -70,6 +82,7 @@ class DocumentModelTests(TestCase):
         self.assertEqual(doc.annotations[1].comment, "Agreed")
 
     def test_analysis_metadata_embedded_defaults(self):
+        """Embedded polymorphic payload is persisted and retrievable."""
         doc = Document.objects.create(
             title="defaults.pdf",
             file_type="pdf",
@@ -80,6 +93,7 @@ class DocumentModelTests(TestCase):
         self.assertEqual(doc.polymorphic_payload, {"a": 1})
 
     def test_document_stores_raw_file(self):
+        """A document with raw_file stores and returns binary data correctly."""
         doc = Document.objects.create(
             title="data.bin",
             file_type="bin",
@@ -93,41 +107,37 @@ class DocumentModelTests(TestCase):
 # ── Utility Tests ────────────────────────────────────────────────────────────
 
 class UtilityTests(TestCase):
+    """Tests for file-type detection and encoding utilities."""
+
     def test_is_vision_file_pdf(self):
-        from .utils import is_vision_file
+        """is_vision_file returns True for .pdf files."""
         self.assertTrue(is_vision_file("doc.pdf"))
 
     def test_is_vision_file_image(self):
-        from .utils import is_vision_file
+        """is_vision_file returns True for common image file extensions."""
         self.assertTrue(is_vision_file("photo.png"))
         self.assertTrue(is_vision_file("photo.jpg"))
         self.assertTrue(is_vision_file("photo.jpeg"))
 
     def test_is_vision_file_text(self):
-        from .utils import is_vision_file
+        """is_vision_file returns False for non-vision file types."""
         self.assertFalse(is_vision_file("notes.txt"))
         self.assertFalse(is_vision_file("data.csv"))
         self.assertFalse(is_vision_file("README"))
 
     def test_encode_for_vision_image_bytes(self):
-        from .utils import encode_for_vision
-        # Create a tiny valid PNG
-        from PIL import Image
-        import io
+        """encode_for_vision returns a valid base64 string for image bytes."""
         img = Image.new("RGB", (2, 2), color="red")
-        buf = io.BytesIO()
+        buf = BytesIO()
         img.save(buf, format="PNG")
         png_bytes = buf.getvalue()
         b64 = encode_for_vision("test.png", png_bytes)
         self.assertIsInstance(b64, str)
         self.assertGreater(len(b64), 0)
-        # Should be valid base64
-        import base64
         base64.b64decode(b64)
 
     def test_encode_for_vision_pdf(self):
-        from .utils import encode_for_vision
-        # Minimal PDF
+        """encode_for_vision returns a valid base64 string for PDF bytes."""
         pdf_bytes = (
             b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
             b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
@@ -142,11 +152,10 @@ class UtilityTests(TestCase):
         b64 = encode_for_vision("doc.pdf", pdf_bytes)
         self.assertIsInstance(b64, str)
         self.assertGreater(len(b64), 100)
-        import base64
         base64.b64decode(b64)
 
     def test_encode_for_vision_invalid_image(self):
-        from .utils import encode_for_vision
+        """encode_for_vision raises ValueError for invalid image data."""
         with self.assertRaises(ValueError):
             encode_for_vision("bad.png", b"not an image")
 
@@ -154,6 +163,8 @@ class UtilityTests(TestCase):
 # ── Service-Layer Tests ──────────────────────────────────────────────────────
 
 class DocumentProcessingServiceTests(TestCase):
+    """Tests for DocumentProcessingService happy-path and error handling."""
+
     def _build_mock_groq_response(self, content: str):
         choice = MagicMock()
         choice.message.content = content
@@ -165,6 +176,7 @@ class DocumentProcessingServiceTests(TestCase):
 
     @patch("analytics_engine.services.Groq")
     def test_analyze_success(self, mock_groq_cls):
+        """A successful analysis stores metadata and polymorphic payload."""
         raw_payload = {
             "analysis_metadata": {
                 "summary": "An invoice document",
@@ -200,6 +212,7 @@ class DocumentProcessingServiceTests(TestCase):
 
     @patch("analytics_engine.services.Groq")
     def test_analyze_success_top_level_function(self, mock_groq_cls):
+        """The top-level analyze_document function produces valid results."""
         raw_payload = {
             "analysis_metadata": {
                 "summary": "Simple memo",
@@ -224,6 +237,7 @@ class DocumentProcessingServiceTests(TestCase):
 
     @patch("analytics_engine.services.Groq")
     def test_analyze_api_failure(self, mock_groq_cls):
+        """An API failure returns an error dict with a descriptive message."""
         mock_client = MagicMock()
         mock_client.chat.completions.create.side_effect = Exception("Network error")
         mock_groq_cls.return_value = mock_client
@@ -240,6 +254,7 @@ class DocumentProcessingServiceTests(TestCase):
 
     @patch("analytics_engine.services.Groq")
     def test_analyze_json_decode_failure(self, mock_groq_cls):
+        """Invalid JSON from the API returns a parse error."""
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = (
             self._build_mock_groq_response("not valid json")
@@ -257,6 +272,7 @@ class DocumentProcessingServiceTests(TestCase):
 
     @patch("analytics_engine.services.Groq")
     def test_analyze_missing_analysis_metadata_fields(self, mock_groq_cls):
+        """Missing optional fields default to empty/zero values."""
         raw_payload = {
             "analysis_metadata": {
                 "classification": "Log",
@@ -280,6 +296,7 @@ class DocumentProcessingServiceTests(TestCase):
 
     @patch("analytics_engine.services.Groq")
     def test_analyze_missing_polymorphic_payload(self, mock_groq_cls):
+        """A missing polymorphic payload defaults to an empty dict."""
         raw_payload = {
             "analysis_metadata": {
                 "summary": "No polymorphic payload",
@@ -306,6 +323,7 @@ class DocumentProcessingServiceTests(TestCase):
 
     @patch("analytics_engine.services.Groq")
     def test_analyze_db_save_failure(self, mock_groq_cls):
+        """A database save error returns a descriptive error message."""
         raw_payload = {
             "analysis_metadata": {
                 "summary": "Will not save",
@@ -333,6 +351,7 @@ class DocumentProcessingServiceTests(TestCase):
 
     @patch("analytics_engine.services.Groq")
     def test_custom_model_override(self, mock_groq_cls):
+        """The service uses the explicitly provided model name."""
         raw_payload = {
             "analysis_metadata": {
                 "summary": "Custom model",
@@ -357,6 +376,7 @@ class DocumentProcessingServiceTests(TestCase):
 
     @patch("analytics_engine.services.Groq")
     def test_default_model(self, mock_groq_cls):
+        """The service defaults to llama-3.1-8b-instant when no model is specified."""
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = (
             self._build_mock_groq_response(
@@ -382,6 +402,7 @@ class DocumentProcessingServiceTests(TestCase):
 
     @patch("analytics_engine.services.Groq")
     def test_json_mode_enforced(self, mock_groq_cls):
+        """The API call enforces json_object response format."""
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = (
             self._build_mock_groq_response(
@@ -407,6 +428,7 @@ class DocumentProcessingServiceTests(TestCase):
 
     @patch("analytics_engine.services.Groq")
     def test_prompt_contains_raw_text(self, mock_groq_cls):
+        """The raw document text is included in the prompt sent to the API."""
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = (
             self._build_mock_groq_response(
@@ -440,6 +462,7 @@ class DocumentProcessingServiceTests(TestCase):
     def test_vision_pipeline_dispatches_for_pdf(
         self, mock_groq_cls, mock_encode
     ):
+        """PDF files are processed through the vision pipeline."""
         mock_encode.return_value = "fakebase64=="
         raw_payload = {
             "analysis_metadata": {
@@ -484,6 +507,7 @@ class DocumentProcessingServiceTests(TestCase):
     def test_vision_pipeline_dispatches_for_image(
         self, mock_groq_cls, mock_encode
     ):
+        """Image files are processed through the vision pipeline."""
         mock_encode.return_value = "fakebase64=="
         raw_payload = {
             "analysis_metadata": {
@@ -516,6 +540,7 @@ class DocumentProcessingServiceTests(TestCase):
 
     @patch("analytics_engine.services.Groq")
     def test_text_pipeline_for_txt_file(self, mock_groq_cls):
+        """Text files use the text pipeline instead of vision."""
         raw_payload = {
             "analysis_metadata": {
                 "summary": "Text analysis",
@@ -547,7 +572,8 @@ class DocumentProcessingServiceTests(TestCase):
 
     @patch("analytics_engine.services.encode_for_vision")
     @patch("analytics_engine.services.Groq")
-    def test_vision_fails_without_raw_file(self, mock_groq_cls, mock_encode):
+    def test_vision_fails_without_raw_file(self, _mock_groq_cls, mock_encode):
+        """Vision processing fails gracefully when raw_file is missing."""
         doc = Document.objects.create(
             title="scan.pdf", file_type="pdf", raw_text="", raw_file=None
         )
@@ -558,6 +584,7 @@ class DocumentProcessingServiceTests(TestCase):
 
     @patch("analytics_engine.services.Groq")
     def test_truncates_oversized_text(self, mock_groq_cls):
+        """Text exceeding the character limit is truncated with a notice."""
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = (
             self._build_mock_groq_response(
@@ -587,6 +614,7 @@ class DocumentProcessingServiceTests(TestCase):
 
     @patch("analytics_engine.services.Groq")
     def test_does_not_truncate_small_text(self, mock_groq_cls):
+        """Small text is passed through without truncation."""
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = (
             self._build_mock_groq_response(
@@ -618,7 +646,10 @@ class DocumentProcessingServiceTests(TestCase):
 # ── View Tests ───────────────────────────────────────────────────────────────
 
 class DocumentUploadViewTests(TestCase):
+    """Tests for the document upload API endpoint."""
+
     def test_upload_success(self):
+        """Uploading a file creates a Document and returns its ID."""
         file_data = BytesIO(b"hello world, this is a test file")
         file_data.name = "greeting.txt"
         resp = self.client.post(
@@ -635,11 +666,13 @@ class DocumentUploadViewTests(TestCase):
         self.assertEqual(doc.raw_file, b"hello world, this is a test file")
 
     def test_upload_missing_file(self):
+        """Uploading without a file returns a 400 error."""
         resp = self.client.post(reverse("document-upload"), {}, format="multipart")
         self.assertEqual(resp.status_code, 400)
         self.assertIn("error", resp.json())
 
     def test_upload_no_extension(self):
+        """A file without an extension is accepted with an empty file_type."""
         file_data = BytesIO(b"content")
         file_data.name = "README"
         resp = self.client.post(
@@ -654,7 +687,10 @@ class DocumentUploadViewTests(TestCase):
 
 
 class DocumentDetailViewTests(TestCase):
+    """Tests for the document detail JSON API endpoint."""
+
     def test_detail_existing(self):
+        """An existing document returns its full details as JSON."""
         doc = Document.objects.create(
             title="detail.txt",
             file_type="txt",
@@ -673,6 +709,7 @@ class DocumentDetailViewTests(TestCase):
         self.assertEqual(body["annotations"], [])
 
     def test_detail_not_found(self):
+        """A non-existent document ID returns a 404 error."""
         resp = self.client.get(
             reverse("document-detail", args=["000000000000000000000000"])
         )
@@ -680,8 +717,11 @@ class DocumentDetailViewTests(TestCase):
 
 
 class DocumentProcessViewTests(TestCase):
+    """Tests for the document process/analysis API endpoint."""
+
     @patch("analytics_engine.views._trigger_llm_pipeline")
     def test_process_success(self, mock_pipeline):
+        """Processing a document triggers the LLM pipeline and returns results."""
         mock_pipeline.return_value = {
             "analysis_metadata": {
                 "summary": "Processed doc",
@@ -706,6 +746,7 @@ class DocumentProcessViewTests(TestCase):
         mock_pipeline.assert_called_once_with(doc)
 
     def test_process_not_found(self):
+        """Processing a non-existent document returns a 404 error."""
         resp = self.client.post(
             reverse("document-process", args=["000000000000000000000000"])
         )
@@ -713,7 +754,10 @@ class DocumentProcessViewTests(TestCase):
 
 
 class DocumentAnnotateViewTests(TestCase):
+    """Tests for the annotation API endpoint."""
+
     def test_annotate_success(self):
+        """Annotating a document creates and persists the annotation."""
         doc = Document.objects.create(
             title="annotate.txt", file_type="txt", raw_text="annotate me"
         )
@@ -737,6 +781,7 @@ class DocumentAnnotateViewTests(TestCase):
         self.assertEqual(doc.annotations[0].user_id, "alice")
 
     def test_annotate_defaults_for_missing_fields(self):
+        """Missing annotation fields default to empty strings."""
         doc = Document.objects.create(
             title="partial.txt", file_type="txt", raw_text="partial annotate"
         )
@@ -752,6 +797,7 @@ class DocumentAnnotateViewTests(TestCase):
         self.assertEqual(body["highlighted_text"], "")
 
     def test_annotate_invalid_json(self):
+        """Invalid JSON in the request body returns a 400 error."""
         doc = Document.objects.create(
             title="badjson.txt", file_type="txt", raw_text="bad"
         )
@@ -764,6 +810,7 @@ class DocumentAnnotateViewTests(TestCase):
         self.assertIn("error", resp.json())
 
     def test_annotate_not_found(self):
+        """Annotating a non-existent document returns a 404 error."""
         resp = self.client.post(
             reverse("document-annotate", args=["000000000000000000000000"]),
             data=json.dumps({"user_id": "x", "comment": "y", "highlighted_text": "z"}),
@@ -775,8 +822,11 @@ class DocumentAnnotateViewTests(TestCase):
 # ── Integration-Style View Test (mocked Groq through the full stack) ────────
 
 class FullPipelineViewTest(TestCase):
+    """End-to-end integration tests spanning upload, process, and annotate."""
+
     @patch("analytics_engine.services.Groq")
     def test_upload_then_process_then_detail(self, mock_groq_cls):
+        """A full upload-process-detail cycle persists analysis data correctly."""
         raw_payload = {
             "analysis_metadata": {
                 "summary": "Integration test invoice",

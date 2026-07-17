@@ -1,3 +1,5 @@
+"""API and HTML views for document analysis."""
+
 import json
 
 from django.http import JsonResponse
@@ -6,18 +8,22 @@ from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
+from . import services
 from .models import Annotation, Document
 from .utils import extract_text
 
 
 def _trigger_llm_pipeline(document):
-    from . import services
+    """Run the full LLM analysis pipeline and return structured results."""
     return services.analyze_document(document)
 
 
 @method_decorator(csrf_exempt, name="dispatch")
 class DocumentUploadView(View):
+    """Handle file upload and create a new Document record."""
+
     def post(self, request):
+        """Accept a file upload, persist a Document, and return its metadata."""
         uploaded = request.FILES.get("file")
         if not uploaded:
             return JsonResponse({"error": "No file provided"}, status=400)
@@ -37,8 +43,11 @@ class DocumentUploadView(View):
 
 
 class DocumentDetailView(View):
-    def get(self, request, id):
-        doc = get_object_or_404(Document, pk=id)
+    """Return document metadata, analysis, and annotations as JSON."""
+
+    def get(self, request, doc_id):
+        """Return the document's full metadata as JSON."""
+        doc = get_object_or_404(Document, pk=doc_id)
         meta = doc.analysis_metadata
         return JsonResponse(
             {
@@ -62,8 +71,11 @@ class DocumentDetailView(View):
 
 @method_decorator(csrf_exempt, name="dispatch")
 class DocumentProcessView(View):
-    def post(self, request, id):
-        doc = get_object_or_404(Document, pk=id)
+    """Trigger LLM analysis for a document."""
+
+    def post(self, request, doc_id):
+        """Trigger the LLM analysis pipeline for the given document."""
+        doc = get_object_or_404(Document, pk=doc_id)
         result = _trigger_llm_pipeline(doc)
         return JsonResponse(
             {"id": str(doc.pk), "status": "processing_triggered", "result": result},
@@ -73,8 +85,11 @@ class DocumentProcessView(View):
 
 @method_decorator(csrf_exempt, name="dispatch")
 class DocumentAnnotateView(View):
-    def post(self, request, id):
-        doc = get_object_or_404(Document, pk=id)
+    """Add an annotation to an existing document."""
+
+    def post(self, request, doc_id):
+        """Parse and persist an annotation for the given document."""
+        doc = get_object_or_404(Document, pk=doc_id)
         try:
             body = json.loads(request.body)
         except json.JSONDecodeError:
@@ -98,12 +113,18 @@ class DocumentAnnotateView(View):
 
 
 class DashboardView(View):
+    """Render the HTML dashboard listing all documents."""
+
     def get(self, request):
+        """Return HTML with all documents ordered by newest first."""
         docs = Document.objects.all().order_by("-uploaded_at")
         return render(request, "analytics/dashboard.html", {"documents": docs})
 
 
 class DocumentDetailHTMLView(View):
-    def get(self, request, id):
-        doc = get_object_or_404(Document, pk=id)
+    """Render the HTML document detail page."""
+
+    def get(self, request, doc_id):
+        """Return the HTML detail view for a single document."""
+        doc = get_object_or_404(Document, pk=doc_id)
         return render(request, "analytics/document_detail.html", {"document": doc})

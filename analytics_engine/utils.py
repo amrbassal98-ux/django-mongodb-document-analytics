@@ -1,3 +1,5 @@
+"""Utilities for file encoding, text extraction, and vision dispatch."""
+
 import base64
 import io
 import logging
@@ -11,6 +13,7 @@ VISION_EXTS = IMAGE_EXTS | {"pdf"}
 
 
 def extract_text(filename: str, content: bytes) -> str:
+    """Decode text from *content* — extracts PDF text or falls back to raw decode."""
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
     if ext == "pdf":
@@ -24,11 +27,13 @@ def extract_text(filename: str, content: bytes) -> str:
 
 
 def is_vision_file(filename: str) -> bool:
+    """Return True if *filename* indicates a file that needs multimodal analysis."""
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     return ext in VISION_EXTS
 
 
 def encode_for_vision(filename: str, content: bytes) -> str:
+    """Convert *content* (PDF page or image) to a base64-encoded JPEG string."""
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
     if ext == "pdf":
@@ -39,7 +44,7 @@ def encode_for_vision(filename: str, content: bytes) -> str:
 def _image_bytes_to_base64(content: bytes) -> str:
     try:
         img = Image.open(io.BytesIO(content))
-    except Exception as exc:
+    except OSError as exc:
         raise ValueError(f"Failed to open image: {exc}") from exc
 
     buf = io.BytesIO()
@@ -49,13 +54,13 @@ def _image_bytes_to_base64(content: bytes) -> str:
 
 def _pdf_page_to_base64(content: bytes) -> str:
     try:
-        import fitz
+        import fitz  # pylint: disable=import-outside-toplevel
     except ImportError as exc:
         raise ImportError("PyMuPDF required for PDF-to-image conversion") from exc
 
     try:
         doc = fitz.open(stream=content, filetype="pdf")
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         raise ValueError(f"Failed to open PDF stream: {exc}") from exc
 
     if len(doc) == 0:
@@ -65,7 +70,7 @@ def _pdf_page_to_base64(content: bytes) -> str:
     try:
         pix = doc[0].get_pixmap()
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         doc.close()
         raise ValueError(f"Failed to render PDF page: {exc}") from exc
 
@@ -78,24 +83,24 @@ def _pdf_page_to_base64(content: bytes) -> str:
 
 def _extract_pdf_text(content: bytes) -> str:
     try:
-        import fitz
+        import fitz  # pylint: disable=import-outside-toplevel
     except ImportError:
         logger.error("PyMuPDF not installed — falling back to raw decode for PDF")
         return content.decode("latin-1", errors="replace")
 
     try:
         doc = fitz.open(stream=content, filetype="pdf")
-    except Exception as exc:
+    except Exception:  # pylint: disable=broad-exception-caught
         logger.exception("Failed to open PDF stream")
         return content.decode("latin-1", errors="replace")
 
     pages = []
-    for page_num in range(len(doc)):
+    for page_num, page in enumerate(doc):
         try:
-            text = doc[page_num].get_text()
+            text = page.get_text()
             if text.strip():
                 pages.append(text)
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("Failed to extract text from PDF page %d: %s", page_num, exc)
 
     doc.close()

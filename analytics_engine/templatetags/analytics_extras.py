@@ -1,3 +1,5 @@
+"""Custom Django template filters for JSON and polymorphic payload rendering."""
+
 import json
 
 from django import template
@@ -9,19 +11,21 @@ register = template.Library()
 
 @register.filter
 def json_pretty(value):
+    """Format *value* as pretty-printed JSON with 2-space indentation."""
     try:
         dumped = json.dumps(value, indent=2, ensure_ascii=False)
         return mark_safe(dumped)
-    except Exception:
+    except (TypeError, ValueError):
         return str(value)
 
 
 @register.filter(is_safe=True, needs_autoescape=True)
 def render_payload(value, autoescape=True):
+    """Recursively render a polymorphic payload as type-aware styled HTML."""
     try:
         html = _render_value(value, level=0, autoescape=autoescape)
         return mark_safe(html)
-    except Exception:
+    except (TypeError, ValueError, AttributeError, KeyError):
         return mark_safe('<div class="text-danger small">Unable to render payload.</div>')
 
 
@@ -32,19 +36,18 @@ def _esc(text, autoescape):
 def _render_value(value, level, autoescape):
     if isinstance(value, dict):
         return _render_dict(value, level, autoescape)
-    elif isinstance(value, list):
+    if isinstance(value, list):
         return _render_list(value, level, autoescape)
-    elif isinstance(value, bool):
+    if isinstance(value, bool):
         badge_class = "bg-success" if value else "bg-secondary"
         label = "true" if value else "false"
         return f'<span class="badge {badge_class}">{label}</span>'
-    elif isinstance(value, (int, float)):
+    if isinstance(value, (int, float)):
         cls = "text-warning fw-semibold" if isinstance(value, float) else "text-info fw-semibold"
         return f'<span class="{cls}">{_esc(value, autoescape)}</span>'
-    elif value is None:
+    if value is None:
         return '<span class="text-body-secondary fst-italic">null</span>'
-    else:
-        return _esc(value, autoescape)
+    return _esc(value, autoescape)
 
 
 def _clean_key(key):
@@ -72,8 +75,7 @@ def _render_dict(d, level, autoescape):
 
     if level == 0:
         return f'<dl class="row mb-0">{"".join(rows)}</dl>'
-    else:
-        return f'<div class="card card-body p-2 mb-2 bg-body-tertiary border-body-tertiary">{"".join(rows)}</div>'
+    return f'<div class="card card-body p-2 mb-2 bg-body-tertiary border-body-tertiary">{"".join(rows)}</div>'
 
 
 def _render_list(lst, level, autoescape):
@@ -87,9 +89,8 @@ def _render_list(lst, level, autoescape):
             for item in lst
         )
         return f'<div class="d-inline-flex flex-wrap gap-1">{badges}</div>'
-    else:
-        items = "".join(
-            f'<li class="list-group-item border-0 py-1">{_render_value(item, level + 1, autoescape)}</li>'
-            for item in lst
-        )
-        return f'<ul class="list-group list-group-flush mb-0">{items}</ul>'
+    items = "".join(
+        f'<li class="list-group-item border-0 py-1">{_render_value(item, level + 1, autoescape)}</li>'
+        for item in lst
+    )
+    return f'<ul class="list-group list-group-flush mb-0">{items}</ul>'

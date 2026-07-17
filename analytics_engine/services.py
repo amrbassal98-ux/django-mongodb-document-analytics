@@ -1,3 +1,5 @@
+"""LLM-driven document analysis pipeline using Groq."""
+
 import json
 import logging
 import os
@@ -29,7 +31,7 @@ VISION_TEXT_PROMPT = (
 )
 
 
-class DocumentProcessingService:
+class DocumentProcessingService:  # pylint: disable=too-few-public-methods
     """
     Encapsulates the LLM-driven document analysis pipeline.
 
@@ -48,6 +50,11 @@ class DocumentProcessingService:
     # ── public API ───────────────────────────────────────────────────────
 
     def analyze(self, document: Document) -> dict:
+        """Run the full analysis pipeline on *document*.
+
+        Dispatches to the vision or text pipeline based on file type.
+        Returns the parsed analysis_metadata and polymorphic_payload dict.
+        """
         if is_vision_file(document.title):
             return self._analyze_vision(document)
         return self._analyze_text(document)
@@ -95,7 +102,7 @@ class DocumentProcessingService:
                 response_format={"type": "json_object"},
                 temperature=0.1,
             )
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.exception(
                 "Groq API call failed for document %s", document.pk
             )
@@ -137,7 +144,7 @@ class DocumentProcessingService:
                 response_format={"type": "json_object"},
                 temperature=0.1,
             )
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.exception(
                 "Groq vision API call failed for document %s", document.pk
             )
@@ -171,7 +178,7 @@ class DocumentProcessingService:
 
         try:
             document.save()
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.exception(
                 "Failed to save document %s after LLM update", document.pk
             )

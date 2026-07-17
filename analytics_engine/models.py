@@ -1,3 +1,5 @@
+"""MongoDB document models for the analytics engine."""
+
 from django.db import models
 from django_mongodb_backend.fields import (
     EmbeddedModelField,
@@ -7,6 +9,7 @@ from django_mongodb_backend.models import EmbeddedModel
 
 
 class AnalysisMetadata(EmbeddedModel):
+    """Embedded document storing LLM classification results."""
     summary = models.TextField()
     classification = models.CharField(max_length=255)
     confidence_score = models.FloatField()
@@ -16,6 +19,8 @@ class AnalysisMetadata(EmbeddedModel):
 
 
 class Annotation(EmbeddedModel):
+    """Embedded document representing a single user annotation."""
+
     user_id = models.CharField(max_length=255)
     comment = models.TextField()
     highlighted_text = models.TextField()
@@ -25,6 +30,8 @@ class Annotation(EmbeddedModel):
 
 
 class Document(models.Model):
+    """Top-level document model storing raw content, analysis, and annotations."""
+
     title = models.CharField(max_length=500)
     file_type = models.CharField(max_length=100)
     raw_text = models.TextField()

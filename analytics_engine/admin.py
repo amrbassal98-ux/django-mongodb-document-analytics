@@ -1,3 +1,5 @@
+"""Admin configuration for the analytics_engine app."""
+
 from django.contrib import admin
 
 from .models import Document
@@ -5,6 +7,7 @@ from .models import Document
 
 @admin.register(Document)
 class DocumentAdmin(admin.ModelAdmin):
+    """Admin interface for managing Document records."""
     list_display = ("title", "file_type", "uploaded_at")
     list_filter = ("file_type", "uploaded_at")
     search_fields = ("title", "raw_text")
