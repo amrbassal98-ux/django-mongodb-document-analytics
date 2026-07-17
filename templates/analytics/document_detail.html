@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+{% load analytics_extras %}
+
+{% block title %}{{ document.title }} — Document Analytics{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-0">
+  <div class="d-flex justify-content-between align-items-start mb-4">
+    <div>
+      <a href="{% url 'dashboard' %}" class="btn btn-sm btn-outline-secondary mb-2">
+        <i class="bi bi-arrow-left"></i> Back to Dashboard
+      </a>
+      <h3 class="fw-semibold mb-1">{{ document.title }}</h3>
+      <div>
+        <span class="badge bg-info text-dark me-2">{{ document.file_type|upper }}</span>
+        <small class="text-secondary">Uploaded {{ document.uploaded_at|date:"Y-m-d H:i:s" }}</small>
+      </div>
+    </div>
+    <button type="button" class="btn btn-success" id="process-btn">
+      <i class="bi bi-cpu me-1"></i> Run Analysis
+    </button>
+  </div>
+
+  <div class="row g-4">
+    <div class="col-lg-6 d-flex flex-column">
+      <div class="card shadow-sm flex-grow-1">
+        <div class="card-header bg-dark text-white">
+          <i class="bi bi-file-text me-1"></i> Raw Text
+        </div>
+        <div class="card-body p-0">
+          <pre class="mb-0 p-3" style="max-height: 400px; overflow-y: auto; font-size: 0.875rem; white-space: pre-wrap;">{{ document.raw_text }}</pre>
+        </div>
+      </div>
+
+      <div class="card shadow-sm mt-3">
+        <div class="card-header bg-dark text-white">
+          <i class="bi bi-chat-square-text me-1"></i> Add Annotation
+        </div>
+        <div class="card-body">
+          <form id="annotate-form">
+            {% csrf_token %}
+            <div class="mb-2">
+              <input type="text" class="form-control" id="anno-user" name="user_id" placeholder="User ID" required>
+            </div>
+            <div class="mb-2">
+              <textarea class="form-control" id="anno-comment" name="comment" rows="2" placeholder="Comment" required></textarea>
+            </div>
+            <div class="mb-2">
+              <input type="text" class="form-control" id="anno-highlight" name="highlighted_text" placeholder="Highlighted text (optional)">
+            </div>
+            <button type="submit" class="btn btn-primary w-100" id="annotate-btn">
+              <i class="bi bi-plus-circle me-1"></i> Add Annotation
+            </button>
+            <div id="annotate-feedback" class="mt-2"></div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-6 d-flex flex-column">
+      <div class="card shadow-sm">
+        <div class="card-header bg-dark text-white">
+          <i class="bi bi-bar-chart me-1"></i> Analysis Metadata
+        </div>
+        <div class="card-body">
+          {% if document.analysis_metadata %}
+          <table class="table table-sm mb-0">
+            <tr>
+              <th style="width: 140px;">Summary</th>
+              <td>{{ document.analysis_metadata.summary }}</td>
+            </tr>
+            <tr>
+              <th>Classification</th>
+              <td>
+                <span class="badge {% if document.analysis_metadata.confidence_score >= 0.8 %}bg-success{% elif document.analysis_metadata.confidence_score >= 0.5 %}bg-warning text-dark{% else %}bg-danger{% endif %}">
+                  {{ document.analysis_metadata.classification }}
+                </span>
+              </td>
+            </tr>
+            <tr>
+              <th>Confidence</th>
+              <td>
+                <div class="d-flex align-items-center">
+                  <div class="progress flex-grow-1 me-2" style="height: 8px;">
+                    <div class="progress-bar {% if document.analysis_metadata.confidence_score >= 0.8 %}bg-success{% elif document.analysis_metadata.confidence_score >= 0.5 %}bg-warning{% else %}bg-danger{% endif %}" role="progressbar"
+                         style="width: {% widthratio document.analysis_metadata.confidence_score 1 100 %}%">
+                    </div>
+                  </div>
+                  <span class="small">{{ document.analysis_metadata.confidence_score|floatformat:2 }}</span>
+                </div>
+              </td>
+            </tr>
+          </table>
+          {% else %}
+          <div class="text-center py-4 text-secondary">
+            <i class="bi bi-hourglass-split fs-2 d-block mb-2"></i>
+            <p class="mb-0">Not yet analyzed. Click <strong>Run Analysis</strong> to start.</p>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="card shadow-sm mt-3">
+        <div class="card-header bg-dark text-white d-flex align-items-center">
+          <i class="bi bi-diagram-3 me-1"></i> Polymorphic Payload
+        </div>
+        <div class="card-body">
+          {% if document.polymorphic_payload %}
+          <div style="max-height: 450px; overflow-y: auto;">
+            {{ document.polymorphic_payload|render_payload }}
+          </div>
+          {% else %}
+          <div class="text-center py-4 text-secondary">
+            <i class="bi bi-box-seam fs-2 d-block mb-2"></i>
+            <p class="mb-0">No payload data available.</p>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="card shadow-sm mt-3">
+        <div class="card-header bg-dark text-white">
+          <i class="bi bi-chat-dots me-1"></i> Annotations
+          <span class="badge bg-secondary ms-2">{{ document.annotations|length }}</span>
+        </div>
+        <div class="card-body p-0">
+          {% if document.annotations %}
+          <ul class="list-group list-group-flush">
+            {% for anno in document.annotations %}
+            <li class="list-group-item">
+              <div class="d-flex justify-content-between">
+                <strong class="small">{{ anno.user_id }}</strong>
+                <small class="text-secondary">{{ anno.comment|truncatewords:20 }}</small>
+              </div>
+              {% if anno.highlighted_text %}
+              <p class="mb-0 mt-1 small text-secondary-emphasis">
+                <i class="bi bi-quote me-1"></i>{{ anno.highlighted_text }}
+              </p>
+              {% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <div class="text-center py-4 text-secondary">
+            <i class="bi bi-chat-square-dots fs-2 d-block mb-2"></i>
+            <p class="mb-0">No annotations yet. Use the form to add one.</p>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="process-feedback" class="mt-3"></div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function() {
+  const docId = '{{ document.pk }}';
+
+  // ── Process / Analyse ──────────────────────────────────────────────────
+  document.getElementById('process-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('process-btn');
+    const fb = document.getElementById('process-feedback');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Analysing...';
+    fb.innerHTML = '';
+
+    try {
+      const resp = await fetch('/api/v1/documents/' + docId + '/process/', { method: 'POST' });
+      const data = await resp.json();
+      if (resp.ok) {
+        location.reload();
+      } else {
+        fb.innerHTML = '<div class="alert alert-danger py-2">' + (data.error || 'Processing failed') + '</div>';
+      }
+    } catch (err) {
+      fb.innerHTML = '<div class="alert alert-danger py-2">Network error: ' + err.message + '</div>';
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-cpu me-1"></i> Run Analysis';
+    }
+  });
+
+  // ── Annotate ────────────────────────────────────────────────────────────
+  document.getElementById('annotate-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('annotate-btn');
+    const fb = document.getElementById('annotate-feedback');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Saving...';
+    fb.innerHTML = '';
+
+    const body = JSON.stringify({
+      user_id: document.getElementById('anno-user').value,
+      comment: document.getElementById('anno-comment').value,
+      highlighted_text: document.getElementById('anno-highlight').value,
+    });
+
+    try {
+      const resp = await fetch('/api/v1/documents/' + docId + '/annotate/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
+        },
+        body: body,
+      });
+      if (resp.ok) {
+        location.reload();
+      } else {
+        const data = await resp.json();
+        fb.innerHTML = '<div class="alert alert-danger py-2 small">' + (data.error || 'Annotation failed') + '</div>';
+      }
+    } catch (err) {
+      fb.innerHTML = '<div class="alert alert-danger py-2 small">Network error: ' + err.message + '</div>';
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-plus-circle me-1"></i> Add Annotation';
+    }
+  });
+})();
+</script>
+{% endblock %}
