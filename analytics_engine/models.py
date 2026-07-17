@@ -28,6 +28,7 @@ class Document(models.Model):
     title = models.CharField(max_length=500)
     file_type = models.CharField(max_length=100)
     raw_text = models.TextField()
+    raw_file = models.BinaryField(null=True, blank=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     analysis_metadata = EmbeddedModelField(
